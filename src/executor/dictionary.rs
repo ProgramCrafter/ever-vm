@@ -1301,3 +1301,62 @@ pub(super) fn execute_dictisetgetoptref(engine: &mut Engine) -> Status {
 pub(super) fn execute_dictusetgetoptref(engine: &mut Engine) -> Status {
     dict(engine, "DICTUSETGETOPTREF", keyreader_from_uint, SET | GET, valwriter_add_or_remove_refopt)
 }
+
+/// Proposal #---
+/// DICTMODIFY[U/I/][REF]  (len key dict cont_have cont_miss -- dict')
+/// Opcode for general dictionary modification at a specific key:
+/// - if key is present, `cont_have: (slice* -> slice*)` is called to replace the value;
+/// - if key is absent, `cont_miss: (() -> slice*)` is called to initialize it.
+/// It is guaranteed that only one of continuations gets called.
+/// 
+/// Special cases:
+/// 1. if `cont_have` or `cont_miss` is slice*, it is stored as-is
+/// 2. if `cont_have` or `cont_miss` is null, dictionary is not modified at all
+/// 3. (*) for -REF version of this opcode, use `cell` instead of `slice`
+pub(super) fn execute_dictgenmodify(engine: &mut Engine) -> Status {
+    engine.load_instruction(
+        Instruction::new("DICTGENMODIFY")
+    )?;
+    
+    fetch_stack(engine, 5)?;
+    let nbits = engine.cmd.var(4);
+    let key = keyreader_from_slice(engine.cmd.var(3), nbits)?;
+    let dict = engine.cmd.var(2).as_dict()?.cloned();
+    let dict = HashmapE::with_hashmap(nbits, dict);
+    
+    let var_have = engine.cmd.var(1);
+    let var_miss = engine.cmd.var(0);
+    
+    let prev_value: Option<SliceData> = dict.get_with_gas(key, engine)?;
+    let new_value: Option<SliceData> = match &prev_value {
+        Some(prev_slice) => {
+            if var_have.is_null() {
+                None
+            } else if var_have.is_continuation() {
+                // println!("doing recursive call to {var_have:?} to replace {dict:?}'s already-existent key {key:?}");
+                // probably we have to create a shadow continuation which would complete the operation
+                todo!()
+                // don't forget to push `prev_slice` on stack
+            } else {
+                Some(var_have.as_slice()?)
+            }
+        },
+        None => {
+            if var_miss.is_null() {
+                None
+            } else if var_miss.is_continuation() {
+                // println!("doing recursive call to {var_miss:?} to initialize {dict:?}'s new key {key:?}");
+                // probably we have to create a shadow continuation which would complete the operation
+                todo!()
+            } else {
+                Some(var_miss.as_slice()?)
+            }
+        }
+    };
+    if let Some(new_s) = new_value {
+        dict.set_with_gas(key, &new_value, engine)
+    } else {
+        // println!("no modification required")
+        Ok(())
+    }
+}
